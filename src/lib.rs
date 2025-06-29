@@ -13,6 +13,34 @@ use tracing::{
 use tracing_subscriber::layer::{Context, Layer};
 
 /// A tracing subscriber that outputs profiles in the Firefox Profiler format
+/// 
+/// # Example
+/// 
+/// ```rust
+/// use fxprof_tracing::FxProfSubscriber;
+/// use tracing_subscriber::prelude::*;
+/// 
+/// let subscriber = FxProfSubscriber::new("my-app");
+/// 
+/// // Set up the tracing subscriber
+/// let _guard = tracing_subscriber::registry()
+///     .with(subscriber.clone())
+///     .set_default();
+/// 
+/// // Your application code with tracing
+/// {
+///     let _span = tracing::info_span!("main_function").entered();
+///     tracing::info!("Starting application");
+///     
+///     {
+///         let _span = tracing::debug_span!("inner_function").entered();
+///         tracing::debug!("Processing data");
+///     }
+/// }
+/// 
+/// // Export the profile to a file
+/// subscriber.save_profile("profile.json").unwrap();
+/// ```
 #[derive(Clone)]
 pub struct FxProfSubscriber {
     inner: Arc<Mutex<FxProfSubscriberInner>>,
@@ -37,6 +65,10 @@ struct SpanData {
 
 impl FxProfSubscriber {
     /// Create a new FxProfSubscriber
+    /// 
+    /// # Arguments
+    /// 
+    /// * `product_name` - The name of the application being profiled
     pub fn new(product_name: &str) -> Self {
         let reference_timestamp = ReferenceTimestamp::from_system_time(SystemTime::now());
         let sampling_interval = SamplingInterval::from_nanos(1_000_000); // 1ms
@@ -69,13 +101,29 @@ impl FxProfSubscriber {
         }
     }
     
-    /// Export the profile as JSON
+    /// Export the profile as JSON string
+    /// 
+    /// This returns the profile data in Firefox Profiler's processed profile format
+    /// as a JSON string that can be loaded into the Firefox Profiler web interface.
     pub fn export_profile(&self) -> Result<String, serde_json::Error> {
         let inner = self.inner.lock().unwrap();
         serde_json::to_string_pretty(&inner.profile)
     }
     
     /// Save the profile to a file
+    /// 
+    /// # Arguments
+    /// 
+    /// * `path` - The file path where the profile should be saved
+    /// 
+    /// # Example
+    /// 
+    /// ```rust,no_run
+    /// # use fxprof_tracing::FxProfSubscriber;
+    /// let subscriber = FxProfSubscriber::new("my-app");
+    /// // ... do some tracing ...
+    /// subscriber.save_profile("my-profile.json").unwrap();
+    /// ```
     pub fn save_profile<P: AsRef<std::path::Path>>(&self, path: P) -> Result<(), Box<dyn std::error::Error>> {
         let json = self.export_profile()?;
         std::fs::write(path, json)?;
