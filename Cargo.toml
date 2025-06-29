@@ -1,0 +1,10 @@
+[package]
+name = "fxprof-tracing"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+fxprof-processed-profile = "0.8.1"
+tracing = "0.1.41"
+tracing-subscriber = "0.3.19"
+serde_json = "1.0"
