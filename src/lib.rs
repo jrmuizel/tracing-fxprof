@@ -3,12 +3,13 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use fxprof_processed_profile::{
-    CategoryHandle, CpuDelta, Frame, FrameInfo, FrameFlags, Profile, ProcessHandle, 
-    SamplingInterval, StackHandle, ThreadHandle, Timestamp, ReferenceTimestamp
+    CategoryHandle, CpuDelta, FrameFlags, Profile, ProcessHandle, 
+    SamplingInterval, StackHandle, ThreadHandle, Timestamp, ReferenceTimestamp,
+    StringHandle
 };
 use tracing::{
     span::{Attributes, Id, Record},
-    Event, Metadata, Subscriber,
+    Event, Subscriber,
 };
 use tracing_subscriber::layer::{Context, Layer};
 
@@ -17,7 +18,7 @@ use tracing_subscriber::layer::{Context, Layer};
 /// # Example
 /// 
 /// ```rust
-/// use fxprof_tracing::FxProfSubscriber;
+/// use tracing_fxprof::FxProfSubscriber;
 /// use tracing_subscriber::prelude::*;
 /// 
 /// let subscriber = FxProfSubscriber::new("my-app");
@@ -57,8 +58,6 @@ struct FxProfSubscriberInner {
 struct SpanData {
     name: String,
     target: String,
-    level: tracing::Level,
-    start_time: SystemTime,
     stack_handle: Option<StackHandle>,
     thread_id: std::thread::ThreadId,
 }
@@ -119,7 +118,7 @@ impl FxProfSubscriber {
     /// # Example
     /// 
     /// ```rust,no_run
-    /// # use fxprof_tracing::FxProfSubscriber;
+    /// # use tracing_fxprof::FxProfSubscriber;
     /// let subscriber = FxProfSubscriber::new("my-app");
     /// // ... do some tracing ...
     /// subscriber.save_profile("my-profile.json").unwrap();
@@ -177,8 +176,6 @@ where
         let span_data = SpanData {
             name: metadata.name().to_string(),
             target: metadata.target().to_string(),
-            level: *metadata.level(),
-            start_time: SystemTime::now(),
             stack_handle: None,
             thread_id,
         };
@@ -200,21 +197,20 @@ where
         let thread = Self::get_or_create_thread(&mut inner, thread_id);
         
         // Create frame info for this span
-        let string_handle = inner.profile.intern_string(&frame_name);
-        
-        let frame_info = FrameInfo {
-            frame: Frame::Label(string_handle),
-            category_pair: CategoryHandle::OTHER.into(),
-            flags: FrameFlags::empty(),
-        };
+        let string_handle = inner.profile.handle_for_string(&frame_name);
         
         // Get the current stack
         let current_stacks = inner.stacks.get(&thread_id).cloned().unwrap_or_default();
         let parent_stack = current_stacks.last().copied();
         
         // Create frame and stack
-        let frame_handle = inner.profile.intern_frame(thread, frame_info);
-        let stack_handle = inner.profile.intern_stack(thread, parent_stack, frame_handle);
+        let frame_handle = inner.profile.handle_for_frame_with_label(
+            thread,
+            string_handle,
+            CategoryHandle::OTHER,
+            FrameFlags::empty(),
+        );
+        let stack_handle = inner.profile.handle_for_stack(thread, frame_handle, parent_stack);
         
         // Update the span with its stack handle
         if let Some(span_data) = inner.spans.get_mut(id) {
@@ -281,7 +277,7 @@ where
         // Create a marker for the event
         let metadata = event.metadata();
         let event_name = format!("{}::{}", metadata.target(), metadata.name());
-        let name_handle = inner.profile.intern_string(&event_name);
+        let name_handle = inner.profile.handle_for_string(&event_name);
         
         // Create a simple text marker for the event
         let marker = SimpleTextMarker {
@@ -318,8 +314,8 @@ fn thread_id_to_u32(thread_id: std::thread::ThreadId) -> u32 {
 // Simple marker implementation for events
 #[derive(Debug, Clone)]
 struct SimpleTextMarker {
-    name: fxprof_processed_profile::StringHandle,
-    text: fxprof_processed_profile::StringHandle,
+    name: StringHandle,
+    text: StringHandle,
 }
 
 impl fxprof_processed_profile::StaticSchemaMarker for SimpleTextMarker {
@@ -336,22 +332,25 @@ impl fxprof_processed_profile::StaticSchemaMarker for SimpleTextMarker {
         }
     ];
 
-    fn name(&self, _profile: &mut Profile) -> fxprof_processed_profile::StringHandle {
+    fn name(&self, _profile: &mut Profile) -> StringHandle {
         self.name
     }
 
-    fn category(&self, _profile: &mut Profile) -> CategoryHandle {
-        CategoryHandle::OTHER
-    }
-
-    fn string_field_value(&self, _field_index: u32) -> fxprof_processed_profile::StringHandle {
+    fn string_field_value(&self, _field_index: u32) -> StringHandle {
         self.text
     }
 
     fn number_field_value(&self, _field_index: u32) -> f64 {
         unreachable!()
     }
+
+    fn flow_field_value(&self, _field_index: u32) -> u64 {
+        unreachable!()
+    }
 }
+
+
+
 
 #[cfg(test)]
 mod tests {
