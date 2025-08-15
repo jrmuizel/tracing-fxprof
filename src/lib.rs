@@ -7,11 +7,15 @@ use fxprof_processed_profile::{
     SamplingInterval, StackHandle, ThreadHandle, Timestamp, ReferenceTimestamp,
     StringHandle
 };
+use tracing::field::{self, Visit};
 use tracing::{
     span::{Attributes, Id, Record},
     Event, Subscriber,
 };
 use tracing_subscriber::layer::{Context, Layer};
+use tracing_subscriber::registry::LookupSpan;
+
+
 
 /// A tracing subscriber that outputs profiles in the Firefox Profiler format
 /// 
@@ -165,7 +169,7 @@ impl FxProfSubscriber {
 
 impl<S> Layer<S> for FxProfSubscriber 
 where
-    S: Subscriber,
+    S: Subscriber + for<'span> LookupSpan<'span>,
 {
     fn on_new_span(&self, attrs: &Attributes<'_>, id: &Id, _ctx: Context<'_, S>) {
         let mut inner = self.inner.lock().unwrap();
@@ -269,47 +273,92 @@ where
         // Could be used to record span fields as markers or metadata
     }
     
-    fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
-        let mut inner = self.inner.lock().unwrap();
-        let thread_id = std::thread::current().id();
-        let thread = Self::get_or_create_thread(&mut inner, thread_id);
-        
-        // Create a marker for the event
-        let metadata = event.metadata();
-        let event_name = format!("{}::{}", metadata.target(), metadata.name());
-        let name_handle = inner.profile.handle_for_string(&event_name);
-        
-        // Create a simple text marker for the event
-        let marker = SimpleTextMarker {
-            name: name_handle,
-            text: name_handle, // Could extract actual message here
-        };
-        
-        let timing = fxprof_processed_profile::MarkerTiming::Instant(
-            Self::system_time_to_timestamp(SystemTime::now())
-        );
-        
-        let marker_handle = inner.profile.add_marker(thread, timing, marker);
-        
-        // If we're currently in a span, set the marker's stack
-        if let Some(stacks) = inner.stacks.get(&thread_id) {
-            if let Some(&current_stack) = stacks.last() {
-                inner.profile.set_marker_stack(thread, marker_handle, Some(current_stack));
+    fn on_event(&self, event: &Event<'_>, ctx: Context<'_, S>) {
+
+        if let Some(span) = event.parent().and_then(|id| ctx.span(id)).or_else(|| {
+            event
+                .is_contextual()
+                .then(|| ctx.lookup_current())
+                .flatten()
+        }) {
+
+            let mut inner = self.inner.lock().unwrap();
+            let thread_id = std::thread::current().id();
+            let thread = Self::get_or_create_thread(&mut inner, thread_id);
+
+
+            let span_id = event.parent();
+            if let Some(span_id) = span_id {
+                let span_data = inner.spans.get(span_id).unwrap();
+                let frame_name = format!("{}::{}", span_data.target, span_data.name);
+                let string_handle = inner.profile.handle_for_string(&frame_name);
+            }
+            
+            // Create a marker for the event
+            let metadata = event.metadata();
+            let event_name = format!("{}::{}", metadata.target(), metadata.name());
+            let name_handle = inner.profile.handle_for_string(&event_name);
+            let mut visitor = MarkerVisitor::new();
+            event.record(&mut visitor);
+            let message_handle = inner.profile.handle_for_string(&visitor.fields.iter()
+                    .map(|(k, v)| format!("{}: {}", k, v))
+                    .collect::<Vec<_>>().join(", "));
+
+            
+            // Create a simple text marker for the event
+            let marker = SimpleTextFlowMarker {
+                name: name_handle,
+                text: message_handle, // Could extract actual message here
+                flow: span.id().into_u64(),
+                fields: message_handle,
+            };
+
+            
+            let timing = fxprof_processed_profile::MarkerTiming::Instant(
+                Self::system_time_to_timestamp(SystemTime::now())
+            );
+            
+            let marker_handle = inner.profile.add_marker(thread, timing, marker);
+            
+            // If we're currently in a span, set the marker's stack
+            if let Some(stacks) = inner.stacks.get(&thread_id) {
+                if let Some(&current_stack) = stacks.last() {
+                    inner.profile.set_marker_stack(thread, marker_handle, Some(current_stack));
+                }
+
             }
         }
     }
 }
 
-// Helper function to convert ThreadId to u32
-fn thread_id_to_u32(thread_id: std::thread::ThreadId) -> u32 {
-    // This is a simple hash of the thread ID since we can't directly convert it
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    
-    let mut hasher = DefaultHasher::new();
-    thread_id.hash(&mut hasher);
-    hasher.finish() as u32
+
+struct MarkerVisitor {
+    fields: HashMap<String, String>,
 }
+
+impl MarkerVisitor {
+    fn new() -> Self {
+        Self { fields: HashMap::new() }
+    }
+}
+
+impl Visit for MarkerVisitor {
+    
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        self.fields.insert(field.name().to_string(), format!("{:?}", value));
+    }
+}
+
+ // Helper function to convert ThreadId to u32                                     ... 
+ fn thread_id_to_u32(thread_id: std::thread::ThreadId) -> u32 {                    
+     // This is a simple hash of the thread ID since we can't directly convert it  ... 
+     use std::collections::hash_map::DefaultHasher;                                
+     use std::hash::{Hash, Hasher};                                                
+                                                                                   
+     let mut hasher = DefaultHasher::new();                                        
+     thread_id.hash(&mut hasher);                                                  
+     hasher.finish() as u32                                                        
+ } 
 
 // Simple marker implementation for events
 #[derive(Debug, Clone)]
@@ -349,7 +398,65 @@ impl fxprof_processed_profile::StaticSchemaMarker for SimpleTextMarker {
     }
 }
 
+#[derive(Debug, Clone)]
+struct SimpleTextFlowMarker {
+    name: fxprof_processed_profile::StringHandle,
+    text: fxprof_processed_profile::StringHandle,
+    flow: u64,
+    fields: fxprof_processed_profile::StringHandle,
+}
 
+impl fxprof_processed_profile::StaticSchemaMarker for SimpleTextFlowMarker {
+    const UNIQUE_MARKER_TYPE_NAME: &'static str = "TracingEvent";
+    const CHART_LABEL: Option<&'static str> = Some("{marker.data.text}");
+    const TABLE_LABEL: Option<&'static str> = Some("{marker.name} - {marker.data.text}");
+    
+    const FIELDS: &'static [fxprof_processed_profile::StaticSchemaMarkerField] = &[
+        fxprof_processed_profile::StaticSchemaMarkerField {
+            key: "text",
+            label: "Message",
+            format: fxprof_processed_profile::MarkerFieldFormat::String,
+            flags: fxprof_processed_profile::MarkerFieldFlags::SEARCHABLE,
+        },
+        fxprof_processed_profile::StaticSchemaMarkerField {
+            key: "fields",
+            label: "Fields",
+            format: fxprof_processed_profile::MarkerFieldFormat::String,
+            flags: fxprof_processed_profile::MarkerFieldFlags::SEARCHABLE,
+        },
+        fxprof_processed_profile::StaticSchemaMarkerField {
+            key: "flow",
+            label: "Flow",
+            format: fxprof_processed_profile::MarkerFieldFormat::Flow,
+            flags: fxprof_processed_profile::MarkerFieldFlags::SEARCHABLE,
+        }
+    ];
+
+    fn name(&self, _profile: &mut Profile) -> fxprof_processed_profile::StringHandle {
+        self.name
+    }
+
+
+    fn string_field_value(&self, field_index: u32) -> fxprof_processed_profile::StringHandle {
+        match field_index {
+            0 => self.text,
+            1 => self.fields,
+            _ => unreachable!(),
+        }
+    }
+
+    fn number_field_value(&self, _field_index: u32) -> f64 {
+        unreachable!()
+    }
+
+    fn flow_field_value(&self, field_index: u32) -> u64 {
+        if field_index == 2 {
+            self.flow
+        } else {
+            unreachable!()
+        }
+    }
+}
 
 
 #[cfg(test)]
