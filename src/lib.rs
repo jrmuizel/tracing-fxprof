@@ -1,4 +1,6 @@
+use core::time;
 use std::collections::HashMap;
+use std::marker;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -128,8 +130,10 @@ impl FxProfSubscriber {
     /// subscriber.save_profile("my-profile.json").unwrap();
     /// ```
     pub fn save_profile<P: AsRef<std::path::Path>>(&self, path: P) -> Result<(), Box<dyn std::error::Error>> {
-        let json = self.export_profile()?;
-        std::fs::write(path, json)?;
+        let inner = self.inner.lock().unwrap();
+        let output_file = std::fs::File::create(path).unwrap();
+        let writer = std::io::BufWriter::new(output_file);
+        serde_json::to_writer(writer, &inner.profile).unwrap();
         Ok(())
     }
     
@@ -274,6 +278,18 @@ where
     }
     
     fn on_event(&self, event: &Event<'_>, ctx: Context<'_, S>) {
+        let mut inner = self.inner.lock().unwrap();
+        let thread_id = std::thread::current().id();
+        let thread = Self::get_or_create_thread(&mut inner, thread_id); 
+
+        let metadata = event.metadata();
+        let event_name = format!("{}::{}", metadata.target(), metadata.name());
+        let name_handle = inner.profile.handle_for_string(&event_name);
+        let mut visitor = MarkerVisitor::new();
+        event.record(&mut visitor);
+        let message_handle = inner.profile.handle_for_string(&visitor.fields.iter()
+                .map(|(k, v)| format!("{}: {}", k, v))
+                .collect::<Vec<_>>().join(", "));
 
         if let Some(span) = event.parent().and_then(|id| ctx.span(id)).or_else(|| {
             event
@@ -281,11 +297,6 @@ where
                 .then(|| ctx.lookup_current())
                 .flatten()
         }) {
-
-            let mut inner = self.inner.lock().unwrap();
-            let thread_id = std::thread::current().id();
-            let thread = Self::get_or_create_thread(&mut inner, thread_id);
-
 
             let span_id = event.parent();
             if let Some(span_id) = span_id {
@@ -295,14 +306,7 @@ where
             }
             
             // Create a marker for the event
-            let metadata = event.metadata();
-            let event_name = format!("{}::{}", metadata.target(), metadata.name());
-            let name_handle = inner.profile.handle_for_string(&event_name);
-            let mut visitor = MarkerVisitor::new();
-            event.record(&mut visitor);
-            let message_handle = inner.profile.handle_for_string(&visitor.fields.iter()
-                    .map(|(k, v)| format!("{}: {}", k, v))
-                    .collect::<Vec<_>>().join(", "));
+
 
             
             // Create a simple text marker for the event
@@ -327,6 +331,19 @@ where
                 }
 
             }
+        } else {
+
+            let marker = SimpleTextMarker {
+                name: name_handle,
+                text: message_handle,
+            };
+
+            let timing = fxprof_processed_profile::MarkerTiming::Instant(
+                Self::system_time_to_timestamp(SystemTime::now())
+            );
+
+            let marker_handle = inner.profile.add_marker(thread, timing, marker);
+
         }
     }
 }
