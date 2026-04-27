@@ -3,7 +3,7 @@ use tracing_subscriber::prelude::*;
 use std::thread;
 use std::time::Duration;
 
-#[tracing::instrument]
+//#[tracing::instrument]
 fn fibonacci(n: u64) -> u64 {
     if n <= 1 {
         tracing::debug!("Base case: n = {}", n);
@@ -18,7 +18,7 @@ fn fibonacci(n: u64) -> u64 {
     }
 }
 
-#[tracing::instrument]
+//#[tracing::instrument]
 fn simulate_work(task_name: &str, duration_ms: u64) {
     tracing::info!("Starting task: {}", task_name);
     
