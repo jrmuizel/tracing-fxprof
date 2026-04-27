@@ -63,6 +63,7 @@ struct SpanData {
     name: String,
     target: String,
     thread_id: std::thread::ThreadId,
+    start_time: Option<SystemTime>,
 }
 
 impl FxProfSubscriber {
@@ -180,18 +181,48 @@ where
             name: metadata.name().to_string(),
             target: metadata.target().to_string(),
             thread_id,
+            start_time: None,
         };
         
         inner.spans.insert(id.clone(), span_data);
     }
     
     fn on_enter(&self, id: &Id, _ctx: Context<'_, S>) {
-
-
+        let mut inner = self.inner.lock().unwrap();
+        if let Some(span_data) = inner.spans.get_mut(id) {
+            span_data.start_time = Some(SystemTime::now());
+        }
     }
     
     fn on_exit(&self, id: &Id, _ctx: Context<'_, S>) {
+        let mut inner = self.inner.lock().unwrap();
 
+        if let Some(span_data) = inner.spans.get(id) {
+            if let Some(start_time) = span_data.start_time {
+                let thread_id = span_data.thread_id;
+                let span_name = format!("{}::{}", span_data.target, span_data.name);
+                let flow_id = id.into_u64();
+
+                let thread = Self::get_or_create_thread(&mut inner, thread_id);
+
+                let marker_name = inner.profile.handle_for_string("Span");
+                let text_handle = inner.profile.handle_for_string(&span_name);
+
+                let marker = SimpleTextFlowMarker {
+                    name: marker_name,
+                    text: text_handle,
+                    flow: flow_id,
+                    fields: text_handle,
+                };
+
+                let timing = fxprof_processed_profile::MarkerTiming::Interval(
+                    Self::system_time_to_timestamp(start_time),
+                    Self::system_time_to_timestamp(SystemTime::now())
+                );
+
+                inner.profile.add_marker(thread, timing, marker);
+            }
+        }
     }
     
     fn on_close(&self, id: Id, _ctx: Context<'_, S>) {
