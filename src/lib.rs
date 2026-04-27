@@ -224,16 +224,7 @@ where
         
         // Push the stack onto the thread's stack
         inner.stacks.get_mut(&thread_id).unwrap().push(stack_handle);
-        
-        // Add a sample for span entry
-        let timestamp = Self::system_time_to_timestamp(SystemTime::now());
-        inner.profile.add_sample(
-            thread,
-            timestamp,
-            Some(stack_handle),
-            CpuDelta::ZERO,
-            1,
-        );
+    
     }
     
     fn on_exit(&self, id: &Id, _ctx: Context<'_, S>) {
@@ -244,24 +235,11 @@ where
         } else {
             return;
         };
-        
-        let thread = Self::get_or_create_thread(&mut inner, thread_id);
-        
+                
         // Pop the stack
         if let Some(stacks) = inner.stacks.get_mut(&thread_id) {
             stacks.pop();
             
-            // Add a sample for span exit
-            let timestamp = Self::system_time_to_timestamp(SystemTime::now());
-            let current_stack = stacks.last().copied();
-            
-            inner.profile.add_sample(
-                thread,
-                timestamp,
-                current_stack,
-                CpuDelta::ZERO,
-                1,
-            );
         }
     }
     
