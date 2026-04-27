@@ -3,8 +3,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use fxprof_processed_profile::{
-    CategoryHandle, FrameFlags, Profile, ProcessHandle,
-    SamplingInterval, StackHandle, ThreadHandle, Timestamp, ReferenceTimestamp,
+    Profile, ProcessHandle,
+    SamplingInterval, ThreadHandle, Timestamp, ReferenceTimestamp,
     StringHandle, Marker, MarkerField, Schema, FlowId, Category
 };
 use tracing::field::Visit;
@@ -56,13 +56,12 @@ struct FxProfSubscriberInner {
     process: ProcessHandle,
     threads: HashMap<std::thread::ThreadId, ThreadHandle>,
     spans: HashMap<Id, SpanData>,
-    stacks: HashMap<std::thread::ThreadId, Vec<StackHandle>>,
+    //stacks: HashMap<std::thread::ThreadId, Vec<StackHandle>>,
 }
 
 struct SpanData {
     name: String,
     target: String,
-    stack_handle: Option<StackHandle>,
     thread_id: std::thread::ThreadId,
 }
 
@@ -99,7 +98,6 @@ impl FxProfSubscriber {
                 process,
                 threads: HashMap::new(),
                 spans: HashMap::new(),
-                stacks: HashMap::new(),
             })),
         }
     }
@@ -154,7 +152,6 @@ impl FxProfSubscriber {
         
         inner.profile.set_thread_name(thread, &thread_name);
         inner.threads.insert(thread_id, thread);
-        inner.stacks.insert(thread_id, Vec::new());
         
         thread
     }
@@ -182,7 +179,6 @@ where
         let span_data = SpanData {
             name: metadata.name().to_string(),
             target: metadata.target().to_string(),
-            stack_handle: None,
             thread_id,
         };
         
@@ -190,57 +186,12 @@ where
     }
     
     fn on_enter(&self, id: &Id, _ctx: Context<'_, S>) {
-        let mut inner = self.inner.lock().unwrap();
-        
-        // First get the span data to avoid borrowing conflicts
-        let (thread_id, frame_name) = if let Some(span_data) = inner.spans.get(id) {
-            let frame_name = format!("{}::{}", span_data.target, span_data.name);
-            (span_data.thread_id, frame_name)
-        } else {
-            return;
-        };
-        
-        let thread = Self::get_or_create_thread(&mut inner, thread_id);
-        
-        // Create frame info for this span
-        let string_handle = inner.profile.handle_for_string(&frame_name);
 
-        // Get the current stack
-        let current_stacks = inner.stacks.get(&thread_id).cloned().unwrap_or_default();
-        let parent_stack = current_stacks.last().copied();
 
-        // Create frame and stack
-        let frame_handle = inner.profile.handle_for_frame_with_label(
-            string_handle,
-            CategoryHandle::OTHER,
-            FrameFlags::empty(),
-        );
-        let stack_handle = inner.profile.handle_for_stack(frame_handle, parent_stack);
-        
-        // Update the span with its stack handle
-        if let Some(span_data) = inner.spans.get_mut(id) {
-            span_data.stack_handle = Some(stack_handle);
-        }
-        
-        // Push the stack onto the thread's stack
-        inner.stacks.get_mut(&thread_id).unwrap().push(stack_handle);
-    
     }
     
     fn on_exit(&self, id: &Id, _ctx: Context<'_, S>) {
-        let mut inner = self.inner.lock().unwrap();
-        
-        let thread_id = if let Some(span_data) = inner.spans.get(id) {
-            span_data.thread_id
-        } else {
-            return;
-        };
-                
-        // Pop the stack
-        if let Some(stacks) = inner.stacks.get_mut(&thread_id) {
-            stacks.pop();
-            
-        }
+
     }
     
     fn on_close(&self, id: Id, _ctx: Context<'_, S>) {
