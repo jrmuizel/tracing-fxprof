@@ -362,7 +362,7 @@ struct SimpleTextMarker {
 impl Marker for SimpleTextMarker {
     type FieldsType = StringHandle;
 
-    const UNIQUE_MARKER_TYPE_NAME: &'static str = "TracingEvent";
+    const UNIQUE_MARKER_TYPE_NAME: &'static str = "SimpleTextMarker";
     const CATEGORY: Category<'static> = Category::OTHER;
     const CHART_LABEL: Option<&'static str> = Some("{marker.data.text}");
     const TABLE_LABEL: Option<&'static str> = Some("{marker.name} - {marker.data.text}");
@@ -391,7 +391,7 @@ struct SimpleTextFlowMarker {
 impl Marker for SimpleTextFlowMarker {
     type FieldsType = (StringHandle, StringHandle, FlowId);
 
-    const UNIQUE_MARKER_TYPE_NAME: &'static str = "TracingEventFlow";
+    const UNIQUE_MARKER_TYPE_NAME: &'static str = "SimpleTextFlowMarker";
     const CATEGORY: Category<'static> = Category::OTHER;
     const CHART_LABEL: Option<&'static str> = Some("{marker.data.text}");
     const TABLE_LABEL: Option<&'static str> = Some("{marker.name} - {marker.data.text}");
@@ -423,7 +423,7 @@ struct SimpleTextTerminatingFlowMarker {
 impl Marker for SimpleTextTerminatingFlowMarker {
     type FieldsType = (StringHandle, StringHandle, FlowId);
 
-    const UNIQUE_MARKER_TYPE_NAME: &'static str = "TracingEventFlow";
+    const UNIQUE_MARKER_TYPE_NAME: &'static str = "SimpleTextTerminatingFlowMarker";
     const CATEGORY: Category<'static> = Category::OTHER;
     const CHART_LABEL: Option<&'static str> = Some("{marker.data.text}");
     const TABLE_LABEL: Option<&'static str> = Some("{marker.name} - {marker.data.text}");
