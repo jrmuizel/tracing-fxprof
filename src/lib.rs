@@ -1,15 +1,13 @@
-use core::time;
 use std::collections::HashMap;
-use std::marker;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use fxprof_processed_profile::{
-    CategoryHandle, CpuDelta, FrameFlags, Profile, ProcessHandle, 
+    CategoryHandle, CpuDelta, FrameFlags, Profile, ProcessHandle,
     SamplingInterval, StackHandle, ThreadHandle, Timestamp, ReferenceTimestamp,
-    StringHandle
+    StringHandle, Marker, MarkerField, Schema, FlowId, Category
 };
-use tracing::field::{self, Visit};
+use tracing::field::Visit;
 use tracing::{
     span::{Attributes, Id, Record},
     Event, Subscriber,
@@ -206,19 +204,18 @@ where
         
         // Create frame info for this span
         let string_handle = inner.profile.handle_for_string(&frame_name);
-        
+
         // Get the current stack
         let current_stacks = inner.stacks.get(&thread_id).cloned().unwrap_or_default();
         let parent_stack = current_stacks.last().copied();
-        
+
         // Create frame and stack
         let frame_handle = inner.profile.handle_for_frame_with_label(
-            thread,
             string_handle,
             CategoryHandle::OTHER,
             FrameFlags::empty(),
         );
-        let stack_handle = inner.profile.handle_for_stack(thread, frame_handle, parent_stack);
+        let stack_handle = inner.profile.handle_for_stack(frame_handle, parent_stack);
         
         // Update the span with its stack handle
         if let Some(span_data) = inner.spans.get_mut(id) {
@@ -302,7 +299,7 @@ where
             if let Some(span_id) = span_id {
                 let span_data = inner.spans.get(span_id).unwrap();
                 let frame_name = format!("{}::{}", span_data.target, span_data.name);
-                let string_handle = inner.profile.handle_for_string(&frame_name);
+                let _string_handle = inner.profile.handle_for_string(&frame_name);
             }
             
             // Create a marker for the event
@@ -342,7 +339,7 @@ where
                 Self::system_time_to_timestamp(SystemTime::now())
             );
 
-            let marker_handle = inner.profile.add_marker(thread, timing, marker);
+            let _marker_handle = inner.profile.add_marker(thread, timing, marker);
 
         }
     }
@@ -384,94 +381,55 @@ struct SimpleTextMarker {
     text: StringHandle,
 }
 
-impl fxprof_processed_profile::StaticSchemaMarker for SimpleTextMarker {
+impl Marker for SimpleTextMarker {
+    type FieldsType = StringHandle;
+
     const UNIQUE_MARKER_TYPE_NAME: &'static str = "TracingEvent";
+    const CATEGORY: Category<'static> = Category::OTHER;
     const CHART_LABEL: Option<&'static str> = Some("{marker.data.text}");
     const TABLE_LABEL: Option<&'static str> = Some("{marker.name} - {marker.data.text}");
-    
-    const FIELDS: &'static [fxprof_processed_profile::StaticSchemaMarkerField] = &[
-        fxprof_processed_profile::StaticSchemaMarkerField {
-            key: "text",
-            label: "Message",
-            format: fxprof_processed_profile::MarkerFieldFormat::String,
-            flags: fxprof_processed_profile::MarkerFieldFlags::SEARCHABLE,
-        }
-    ];
+
+    const FIELDS: Schema<Self::FieldsType> = Schema(
+        MarkerField::string("text", "Message")
+    );
 
     fn name(&self, _profile: &mut Profile) -> StringHandle {
         self.name
     }
 
-    fn string_field_value(&self, _field_index: u32) -> StringHandle {
+    fn field_values(&self) -> StringHandle {
         self.text
-    }
-
-    fn number_field_value(&self, _field_index: u32) -> f64 {
-        unreachable!()
-    }
-
-    fn flow_field_value(&self, _field_index: u32) -> u64 {
-        unreachable!()
     }
 }
 
 #[derive(Debug, Clone)]
 struct SimpleTextFlowMarker {
-    name: fxprof_processed_profile::StringHandle,
-    text: fxprof_processed_profile::StringHandle,
+    name: StringHandle,
+    text: StringHandle,
     flow: u64,
-    fields: fxprof_processed_profile::StringHandle,
+    fields: StringHandle,
 }
 
-impl fxprof_processed_profile::StaticSchemaMarker for SimpleTextFlowMarker {
-    const UNIQUE_MARKER_TYPE_NAME: &'static str = "TracingEvent";
+impl Marker for SimpleTextFlowMarker {
+    type FieldsType = (StringHandle, StringHandle, FlowId);
+
+    const UNIQUE_MARKER_TYPE_NAME: &'static str = "TracingEventFlow";
+    const CATEGORY: Category<'static> = Category::OTHER;
     const CHART_LABEL: Option<&'static str> = Some("{marker.data.text}");
     const TABLE_LABEL: Option<&'static str> = Some("{marker.name} - {marker.data.text}");
-    
-    const FIELDS: &'static [fxprof_processed_profile::StaticSchemaMarkerField] = &[
-        fxprof_processed_profile::StaticSchemaMarkerField {
-            key: "text",
-            label: "Message",
-            format: fxprof_processed_profile::MarkerFieldFormat::String,
-            flags: fxprof_processed_profile::MarkerFieldFlags::SEARCHABLE,
-        },
-        fxprof_processed_profile::StaticSchemaMarkerField {
-            key: "fields",
-            label: "Fields",
-            format: fxprof_processed_profile::MarkerFieldFormat::String,
-            flags: fxprof_processed_profile::MarkerFieldFlags::SEARCHABLE,
-        },
-        fxprof_processed_profile::StaticSchemaMarkerField {
-            key: "flow",
-            label: "Flow",
-            format: fxprof_processed_profile::MarkerFieldFormat::Flow,
-            flags: fxprof_processed_profile::MarkerFieldFlags::SEARCHABLE,
-        }
-    ];
 
-    fn name(&self, _profile: &mut Profile) -> fxprof_processed_profile::StringHandle {
+    const FIELDS: Schema<Self::FieldsType> = Schema((
+        MarkerField::string("text", "Message"),
+        MarkerField::string("fields", "Fields"),
+        MarkerField::flow("flow", "Flow"),
+    ));
+
+    fn name(&self, _profile: &mut Profile) -> StringHandle {
         self.name
     }
 
-
-    fn string_field_value(&self, field_index: u32) -> fxprof_processed_profile::StringHandle {
-        match field_index {
-            0 => self.text,
-            1 => self.fields,
-            _ => unreachable!(),
-        }
-    }
-
-    fn number_field_value(&self, _field_index: u32) -> f64 {
-        unreachable!()
-    }
-
-    fn flow_field_value(&self, field_index: u32) -> u64 {
-        if field_index == 2 {
-            self.flow
-        } else {
-            unreachable!()
-        }
+    fn field_values(&self) -> (StringHandle, StringHandle, FlowId) {
+        (self.text, self.fields, FlowId(self.flow))
     }
 }
 
