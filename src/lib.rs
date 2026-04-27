@@ -271,14 +271,7 @@ where
                 Self::system_time_to_timestamp(SystemTime::now())
             );
 
-            let marker_handle = inner.profile.add_marker(thread, timing, marker);
-
-            // Set the marker's stack if available
-            if let Some(stacks) = inner.stacks.get(&thread_id) {
-                if let Some(&current_stack) = stacks.last() {
-                    inner.profile.set_marker_stack(thread, marker_handle, Some(current_stack));
-                }
-            }
+            inner.profile.add_marker(thread, timing, marker);
         }
 
         inner.spans.remove(&id);
@@ -317,10 +310,6 @@ where
             }
             
             // Create a marker for the event
-
-
-            
-            // Create a simple text marker for the event
             let marker = SimpleTextFlowMarker {
                 name: name_handle,
                 text: message_handle, // Could extract actual message here
@@ -333,15 +322,8 @@ where
                 Self::system_time_to_timestamp(SystemTime::now())
             );
             
-            let marker_handle = inner.profile.add_marker(thread, timing, marker);
+            inner.profile.add_marker(thread, timing, marker);
             
-            // If we're currently in a span, set the marker's stack
-            if let Some(stacks) = inner.stacks.get(&thread_id) {
-                if let Some(&current_stack) = stacks.last() {
-                    inner.profile.set_marker_stack(thread, marker_handle, Some(current_stack));
-                }
-
-            }
         } else {
 
             let marker = SimpleTextMarker {
@@ -353,7 +335,7 @@ where
                 Self::system_time_to_timestamp(SystemTime::now())
             );
 
-            let _marker_handle = inner.profile.add_marker(thread, timing, marker);
+            inner.profile.add_marker(thread, timing, marker);
 
         }
     }
