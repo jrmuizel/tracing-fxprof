@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use fxprof_processed_profile::{
-    CategoryHandle, CpuDelta, FrameFlags, Profile, ProcessHandle,
+    CategoryHandle, FrameFlags, Profile, ProcessHandle,
     SamplingInterval, StackHandle, ThreadHandle, Timestamp, ReferenceTimestamp,
     StringHandle, Marker, MarkerField, Schema, FlowId, Category
 };
@@ -245,6 +245,42 @@ where
     
     fn on_close(&self, id: Id, _ctx: Context<'_, S>) {
         let mut inner = self.inner.lock().unwrap();
+
+        // Get span data before removing it
+        if let Some(span_data) = inner.spans.get(&id) {
+            let thread_id = span_data.thread_id;
+            // Clone the data we need before mutable borrows
+            let span_name = format!("{}::{}", span_data.target, span_data.name);
+            let flow_id = id.into_u64();
+
+            // Now we can do mutable borrows
+            let thread = Self::get_or_create_thread(&mut inner, thread_id);
+
+            // Create a terminating flow marker
+            let marker_name = inner.profile.handle_for_string("Span End");
+            let text_handle = inner.profile.handle_for_string(&span_name);
+
+            let marker = SimpleTextTerminatingFlowMarker {
+                name: marker_name,
+                text: text_handle,
+                flow: flow_id,
+                fields: text_handle,
+            };
+
+            let timing = fxprof_processed_profile::MarkerTiming::Instant(
+                Self::system_time_to_timestamp(SystemTime::now())
+            );
+
+            let marker_handle = inner.profile.add_marker(thread, timing, marker);
+
+            // Set the marker's stack if available
+            if let Some(stacks) = inner.stacks.get(&thread_id) {
+                if let Some(&current_stack) = stacks.last() {
+                    inner.profile.set_marker_stack(thread, marker_handle, Some(current_stack));
+                }
+            }
+        }
+
         inner.spans.remove(&id);
     }
     
@@ -400,6 +436,38 @@ impl Marker for SimpleTextFlowMarker {
         MarkerField::string("text", "Message"),
         MarkerField::string("fields", "Fields"),
         MarkerField::flow("flow", "Flow"),
+    ));
+
+    fn name(&self, _profile: &mut Profile) -> StringHandle {
+        self.name
+    }
+
+    fn field_values(&self) -> (StringHandle, StringHandle, FlowId) {
+        (self.text, self.fields, FlowId(self.flow))
+    }
+}
+
+
+#[derive(Debug, Clone)]
+struct SimpleTextTerminatingFlowMarker {
+    name: StringHandle,
+    text: StringHandle,
+    flow: u64,
+    fields: StringHandle,
+}
+
+impl Marker for SimpleTextTerminatingFlowMarker {
+    type FieldsType = (StringHandle, StringHandle, FlowId);
+
+    const UNIQUE_MARKER_TYPE_NAME: &'static str = "TracingEventFlow";
+    const CATEGORY: Category<'static> = Category::OTHER;
+    const CHART_LABEL: Option<&'static str> = Some("{marker.data.text}");
+    const TABLE_LABEL: Option<&'static str> = Some("{marker.name} - {marker.data.text}");
+
+    const FIELDS: Schema<Self::FieldsType> = Schema((
+        MarkerField::string("text", "Message"),
+        MarkerField::string("fields", "Fields"),
+        MarkerField::terminating_flow("flow", "Flow"),
     ));
 
     fn name(&self, _profile: &mut Profile) -> StringHandle {
